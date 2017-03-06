@@ -6,7 +6,6 @@ related to inference and not otherwise tested in types/test_common.py
 
 """
 
-import nose
 import collections
 import re
 from datetime import datetime, date, timedelta, time
@@ -22,6 +21,10 @@ from pandas.compat import u, PY2, lrange
 from pandas.types import inference
 from pandas.types.common import (is_timedelta64_dtype,
                                  is_timedelta64_ns_dtype,
+                                 is_datetime64_dtype,
+                                 is_datetime64_ns_dtype,
+                                 is_datetime64_any_dtype,
+                                 is_datetime64tz_dtype,
                                  is_number,
                                  is_integer,
                                  is_float,
@@ -31,8 +34,6 @@ from pandas.types.common import (is_timedelta64_dtype,
                                  _ensure_categorical)
 from pandas.types.missing import isnull
 from pandas.util import testing as tm
-
-_multiprocess_can_split_ = True
 
 
 def test_is_sequence():
@@ -301,7 +302,6 @@ class TestInference(tm.TestCase):
             for case in cases:
                 if coerce:
                     with tm.assertRaisesRegexp(ValueError, msg):
-                        print(case)
                         lib.maybe_convert_numeric(case, set(),
                                                   coerce_numeric=coerce)
                 else:
@@ -338,7 +338,6 @@ class TestInference(tm.TestCase):
 
 
 class TestTypeInference(tm.TestCase):
-    _multiprocess_can_split_ = True
 
     def test_length_zero(self):
         result = lib.infer_dtype(np.array([], dtype='i4'))
@@ -806,6 +805,38 @@ class TestNumberScalar(tm.TestCase):
         self.assertFalse(is_float(np.timedelta64(1, 'D')))
         self.assertFalse(is_float(Timedelta('1 days')))
 
+    def test_is_datetime_dtypes(self):
+
+        ts = pd.date_range('20130101', periods=3)
+        tsa = pd.date_range('20130101', periods=3, tz='US/Eastern')
+
+        self.assertTrue(is_datetime64_dtype('datetime64'))
+        self.assertTrue(is_datetime64_dtype('datetime64[ns]'))
+        self.assertTrue(is_datetime64_dtype(ts))
+        self.assertFalse(is_datetime64_dtype(tsa))
+
+        self.assertFalse(is_datetime64_ns_dtype('datetime64'))
+        self.assertTrue(is_datetime64_ns_dtype('datetime64[ns]'))
+        self.assertTrue(is_datetime64_ns_dtype(ts))
+        self.assertTrue(is_datetime64_ns_dtype(tsa))
+
+        self.assertTrue(is_datetime64_any_dtype('datetime64'))
+        self.assertTrue(is_datetime64_any_dtype('datetime64[ns]'))
+        self.assertTrue(is_datetime64_any_dtype(ts))
+        self.assertTrue(is_datetime64_any_dtype(tsa))
+
+        self.assertFalse(is_datetime64tz_dtype('datetime64'))
+        self.assertFalse(is_datetime64tz_dtype('datetime64[ns]'))
+        self.assertFalse(is_datetime64tz_dtype(ts))
+        self.assertTrue(is_datetime64tz_dtype(tsa))
+
+        for tz in ['US/Eastern', 'UTC']:
+            dtype = 'datetime64[ns, {}]'.format(tz)
+            self.assertFalse(is_datetime64_dtype(dtype))
+            self.assertTrue(is_datetime64tz_dtype(dtype))
+            self.assertTrue(is_datetime64_ns_dtype(dtype))
+            self.assertTrue(is_datetime64_any_dtype(dtype))
+
     def test_is_timedelta(self):
         self.assertTrue(is_timedelta64_dtype('timedelta64'))
         self.assertTrue(is_timedelta64_dtype('timedelta64[ns]'))
@@ -933,8 +964,3 @@ def test_ensure_categorical():
     values = Categorical(values)
     result = _ensure_categorical(values)
     tm.assert_categorical_equal(result, values)
-
-
-if __name__ == '__main__':
-    nose.runmodule(argv=[__file__, '-vvs', '-x', '--pdb', '--pdb-failure'],
-                   exit=False)

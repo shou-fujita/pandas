@@ -146,6 +146,46 @@ following code will cause trouble because of the regular expression meaning of
    # We need to escape the special character (for >1 len patterns)
    dollars.str.replace(r'-\$', '-')
 
+The ``replace`` method can also take a callable as replacement. It is called 
+on every ``pat`` using :func:`re.sub`. The callable should expect one 
+positional argument (a regex object) and return a string.
+
+.. versionadded:: 0.20.0
+
+.. ipython:: python
+
+   # Reverse every lowercase alphabetic word
+   pat = r'[a-z]+'
+   repl = lambda m: m.group(0)[::-1]
+   pd.Series(['foo 123', 'bar baz', np.nan]).str.replace(pat, repl)
+
+   # Using regex groups
+   pat = r"(?P<one>\w+) (?P<two>\w+) (?P<three>\w+)"
+   repl = lambda m: m.group('two').swapcase()
+   pd.Series(['Foo Bar Baz', np.nan]).str.replace(pat, repl)
+
+The ``replace`` method also accepts a compiled regular expression object
+from :func:`re.compile` as a pattern. All flags should be included in the
+compiled regular expression object.
+
+.. versionadded:: 0.20.0
+
+.. ipython:: python
+
+   import re
+   regex_pat = re.compile(r'^.a|dog', flags=re.IGNORECASE)
+   s3.str.replace(regex_pat, 'XX-XX ')
+
+Including a ``flags`` argument when calling ``replace`` with a compiled
+regular expression object will raise a ``ValueError``.
+
+.. ipython::
+
+    @verbatim
+    In [1]: s3.str.replace(regex_pat, 'XX-XX ', flags=re.IGNORECASE)
+    ---------------------------------------------------------------------------
+    ValueError: case and flags cannot be set when pat is a compiled regex
+
 Indexing with ``.str``
 ----------------------
 
@@ -406,7 +446,7 @@ Method Summary
     :meth:`~Series.str.join`;Join strings in each element of the Series with passed separator
     :meth:`~Series.str.get_dummies`;Split strings on the delimiter returning DataFrame of dummy variables
     :meth:`~Series.str.contains`;Return boolean array if each string contains pattern/regex
-    :meth:`~Series.str.replace`;Replace occurrences of pattern/regex with some other string
+    :meth:`~Series.str.replace`;Replace occurrences of pattern/regex with some other string or the return value of a callable given the occurrence
     :meth:`~Series.str.repeat`;Duplicate values (``s.str.repeat(3)`` equivalent to ``x * 3``)
     :meth:`~Series.str.pad`;"Add whitespace to left, right, or both sides of strings"
     :meth:`~Series.str.center`;Equivalent to ``str.center``

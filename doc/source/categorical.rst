@@ -482,7 +482,7 @@ Pivot tables:
 Data munging
 ------------
 
-The optimized pandas data access methods  ``.loc``, ``.iloc``, ``.ix`` ``.at``, and ``.iat``,
+The optimized pandas data access methods  ``.loc``, ``.iloc``, ``.at``, and ``.iat``,
 work as normal. The only difference is the return type (for getting) and
 that only values already in `categories` can be assigned.
 
@@ -501,7 +501,6 @@ the ``category`` dtype is preserved.
     df.iloc[2:4,:]
     df.iloc[2:4,:].dtypes
     df.loc["h":"j","cats"]
-    df.ix["h":"j",0:1]
     df[df["cats"] == "b"]
 
 An example where the category type is not preserved is if you take one single row: the
@@ -693,6 +692,17 @@ The below raises ``TypeError`` because the categories are ordered and not identi
    In [3]: union_categoricals([a, b])
    Out[3]:
    TypeError: to union ordered Categoricals, all categories must be the same
+
+.. versionadded:: 0.20.0
+
+Ordered categoricals with different categories or orderings can be combined by
+using the ``ignore_ordered=True`` argument.
+
+.. ipython:: python
+
+    a = pd.Categorical(["a", "b", "c"], ordered=True)
+    b = pd.Categorical(["c", "b", "a"], ordered=True)
+    union_categoricals([a, b], ignore_order=True)
 
 ``union_categoricals`` also works with a ``CategoricalIndex``, or ``Series`` containing
 categorical data, but note that the resulting array will always be a plain ``Categorical``

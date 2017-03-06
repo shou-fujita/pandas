@@ -54,7 +54,7 @@ from pandas.types.common import (is_categorical_dtype, is_object_dtype,
 from pandas import (Timestamp, Period, Series, DataFrame,  # noqa
                     Index, MultiIndex, Float64Index, Int64Index,
                     Panel, RangeIndex, PeriodIndex, DatetimeIndex, NaT,
-                    Categorical)
+                    Categorical, CategoricalIndex)
 from pandas.tslib import NaTType
 from pandas.sparse.api import SparseSeries, SparseDataFrame
 from pandas.sparse.array import BlockIndex, IntIndex
@@ -217,6 +217,7 @@ def read_msgpack(path_or_buf, encoding='utf-8', iterator=False, **kwargs):
 
     raise ValueError('path_or_buf needs to be a string file path or file-like')
 
+
 dtype_dict = {21: np.dtype('M8[ns]'),
               u('datetime64[ns]'): np.dtype('M8[ns]'),
               u('datetime64[us]'): np.dtype('M8[us]'),
@@ -236,6 +237,7 @@ def dtype_for(t):
     if t in dtype_dict:
         return dtype_dict[t]
     return np.typeDict.get(t, t)
+
 
 c2f_dict = {'complex': np.float64,
             'complex128': np.float64,
@@ -571,7 +573,7 @@ def decode(obj):
     elif typ == u'period_index':
         data = unconvert(obj[u'data'], np.int64, obj.get(u'compress'))
         d = dict(name=obj[u'name'], freq=obj[u'freq'])
-        return globals()[obj[u'klass']](data, **d)
+        return globals()[obj[u'klass']]._from_ordinals(data, **d)
     elif typ == u'datetime_index':
         data = unconvert(obj[u'data'], np.int64, obj.get(u'compress'))
         d = dict(name=obj[u'name'], freq=obj[u'freq'], verify_integrity=False)

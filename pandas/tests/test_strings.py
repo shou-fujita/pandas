@@ -4,8 +4,6 @@
 from datetime import datetime, timedelta
 import re
 
-import nose
-
 from numpy import nan as NA
 import numpy as np
 from numpy.random import randint
@@ -21,8 +19,6 @@ import pandas.core.strings as strings
 
 
 class TestStringMethods(tm.TestCase):
-
-    _multiprocess_can_split_ = True
 
     def test_api(self):
 
@@ -229,7 +225,7 @@ class TestStringMethods(tm.TestCase):
         # na
         values = Series(['om', 'foo', np.nan])
         res = values.str.contains('foo', na="foo")
-        self.assertEqual(res.ix[2], "foo")
+        self.assertEqual(res.loc[2], "foo")
 
     def test_startswith(self):
         values = Series(['om', NA, 'foo_nom', 'nom', 'bar_foo', NA, 'foo'])
@@ -435,6 +431,102 @@ class TestStringMethods(tm.TestCase):
                 for data in (['a', 'b', None], ['a', 'b', 'c', 'ad']):
                     values = klass(data)
                     self.assertRaises(TypeError, values.str.replace, 'a', repl)
+
+    def test_replace_callable(self):
+        # GH 15055
+        values = Series(['fooBAD__barBAD', NA])
+
+        # test with callable
+        repl = lambda m: m.group(0).swapcase()
+        result = values.str.replace('[a-z][A-Z]{2}', repl, n=2)
+        exp = Series(['foObaD__baRbaD', NA])
+        tm.assert_series_equal(result, exp)
+
+        # test with wrong number of arguments, raising an error
+        if compat.PY2:
+            p_err = r'takes (no|(exactly|at (least|most)) ?\d+) arguments?'
+        else:
+            p_err = (r'((takes)|(missing)) (?(2)from \d+ to )?\d+ '
+                     r'(?(3)required )positional arguments?')
+
+        repl = lambda: None
+        with tm.assertRaisesRegexp(TypeError, p_err):
+            values.str.replace('a', repl)
+
+        repl = lambda m, x: None
+        with tm.assertRaisesRegexp(TypeError, p_err):
+            values.str.replace('a', repl)
+
+        repl = lambda m, x, y=None: None
+        with tm.assertRaisesRegexp(TypeError, p_err):
+            values.str.replace('a', repl)
+
+        # test regex named groups
+        values = Series(['Foo Bar Baz', NA])
+        pat = r"(?P<first>\w+) (?P<middle>\w+) (?P<last>\w+)"
+        repl = lambda m: m.group('middle').swapcase()
+        result = values.str.replace(pat, repl)
+        exp = Series(['bAR', NA])
+        tm.assert_series_equal(result, exp)
+
+    def test_replace_compiled_regex(self):
+        # GH 15446
+        values = Series(['fooBAD__barBAD', NA])
+
+        # test with compiled regex
+        pat = re.compile(r'BAD[_]*')
+        result = values.str.replace(pat, '')
+        exp = Series(['foobar', NA])
+        tm.assert_series_equal(result, exp)
+
+        # mixed
+        mixed = Series(['aBAD', NA, 'bBAD', True, datetime.today(), 'fooBAD',
+                        None, 1, 2.])
+
+        rs = Series(mixed).str.replace(pat, '')
+        xp = Series(['a', NA, 'b', NA, NA, 'foo', NA, NA, NA])
+        tm.assertIsInstance(rs, Series)
+        tm.assert_almost_equal(rs, xp)
+
+        # unicode
+        values = Series([u('fooBAD__barBAD'), NA])
+
+        result = values.str.replace(pat, '')
+        exp = Series([u('foobar'), NA])
+        tm.assert_series_equal(result, exp)
+
+        result = values.str.replace(pat, '', n=1)
+        exp = Series([u('foobarBAD'), NA])
+        tm.assert_series_equal(result, exp)
+
+        # flags + unicode
+        values = Series([b"abcd,\xc3\xa0".decode("utf-8")])
+        exp = Series([b"abcd, \xc3\xa0".decode("utf-8")])
+        pat = re.compile(r"(?<=\w),(?=\w)", flags=re.UNICODE)
+        result = values.str.replace(pat, ", ")
+        tm.assert_series_equal(result, exp)
+
+        # case and flags provided to str.replace will have no effect
+        # and will produce warnings
+        values = Series(['fooBAD__barBAD__bad', NA])
+        pat = re.compile(r'BAD[_]*')
+
+        with tm.assertRaisesRegexp(ValueError, "case and flags cannot be"):
+            result = values.str.replace(pat, '', flags=re.IGNORECASE)
+
+        with tm.assertRaisesRegexp(ValueError, "case and flags cannot be"):
+            result = values.str.replace(pat, '', case=False)
+
+        with tm.assertRaisesRegexp(ValueError, "case and flags cannot be"):
+            result = values.str.replace(pat, '', case=True)
+
+        # test with callable
+        values = Series(['fooBAD__barBAD', NA])
+        repl = lambda m: m.group(0).swapcase()
+        pat = re.compile('[a-z][A-Z]{2}')
+        result = values.str.replace(pat, repl, n=2)
+        exp = Series(['foObaD__baRbaD', NA])
+        tm.assert_series_equal(result, exp)
 
     def test_repeat(self):
         values = Series(['a', 'b', NA, 'c', NA, 'd'])
@@ -2678,8 +2770,3 @@ class TestStringMethods(tm.TestCase):
             expected = Series(np.array(
                 ['ad', 'be', 'cf'], 'S2').astype(object))
             tm.assert_series_equal(result, expected)
-
-
-if __name__ == '__main__':
-    nose.runmodule(argv=[__file__, '-vvs', '-x', '--pdb', '--pdb-failure'],
-                   exit=False)

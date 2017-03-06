@@ -23,8 +23,7 @@ from numpy import nan as NA
 import numpy as np
 import numpy.ma as ma
 
-from pandas.types.cast import (_maybe_upcast,
-                               _infer_dtype_from_scalar,
+from pandas.types.cast import (_maybe_upcast, _infer_dtype_from_scalar,
                                _possibly_cast_to_datetime,
                                _possibly_infer_to_datetimelike,
                                _possibly_convert_platform,
@@ -37,7 +36,7 @@ from pandas.types.common import (is_categorical_dtype,
                                  is_object_dtype,
                                  is_extension_type,
                                  is_datetimetz,
-                                 is_datetime64_dtype,
+                                 is_datetime64_any_dtype,
                                  is_datetime64tz_dtype,
                                  is_bool_dtype,
                                  is_integer_dtype,
@@ -78,7 +77,9 @@ from pandas.compat import (range, map, zip, lrange, lmap, lzip, StringIO, u,
                            OrderedDict, raise_with_traceback)
 from pandas import compat
 from pandas.compat.numpy import function as nv
-from pandas.util.decorators import deprecate_kwarg, Appender, Substitution
+from pandas.util.decorators import (deprecate_kwarg, Appender,
+                                    Substitution)
+from pandas.util.validators import validate_bool_kwarg
 
 from pandas.tseries.period import PeriodIndex
 from pandas.tseries.index import DatetimeIndex
@@ -907,7 +908,26 @@ class DataFrame(NDFrame):
                verbose=True, reauth=False, if_exists='fail', private_key=None):
         """Write a DataFrame to a Google BigQuery table.
 
-        THIS IS AN EXPERIMENTAL LIBRARY
+        The main method a user calls to export pandas DataFrame contents to
+        Google BigQuery table.
+
+        Google BigQuery API Client Library v2 for Python is used.
+        Documentation is available `here
+        <https://developers.google.com/api-client-library/python/apis/bigquery/v2>`__
+
+        Authentication to the Google BigQuery service is via OAuth 2.0.
+
+        - If "private_key" is not provided:
+
+          By default "application default credentials" are used.
+
+          If default application credentials are not found or are restrictive,
+          user account credentials are used. In this case, you will be asked to
+          grant permissions for product name 'pandas GBQ'.
+
+        - If "private_key" is provided:
+
+          Service account credentials will be used to authenticate.
 
         Parameters
         ----------
@@ -932,8 +952,6 @@ class DataFrame(NDFrame):
             Service account private key in JSON format. Can be file path
             or string contents. This is useful for remote server
             authentication (eg. jupyter iPython notebook on remote host)
-
-            .. versionadded:: 0.17.0
         """
 
         from pandas.io import gbq
@@ -962,7 +980,7 @@ class DataFrame(NDFrame):
             in the result (any names not found in the data will become all-NA
             columns)
         coerce_float : boolean, default False
-            Attempt to convert values to non-string, non-numeric objects (like
+            Attempt to convert values of non-string, non-numeric objects (like
             decimal.Decimal) to floating point, useful for SQL result sets
 
         Returns
@@ -1085,7 +1103,7 @@ class DataFrame(NDFrame):
         y : recarray
         """
         if index:
-            if is_datetime64_dtype(self.index) and convert_datetime64:
+            if is_datetime64_any_dtype(self.index) and convert_datetime64:
                 ix_vals = [self.index.to_pydatetime()]
             else:
                 if isinstance(self.index, MultiIndex):
@@ -1105,13 +1123,17 @@ class DataFrame(NDFrame):
                         count += 1
             elif index_names[0] is None:
                 index_names = ['index']
-            names = lmap(str, index_names) + lmap(str, self.columns)
+            names = (lmap(compat.text_type, index_names) +
+                     lmap(compat.text_type, self.columns))
         else:
             arrays = [self[c].get_values() for c in self.columns]
-            names = lmap(str, self.columns)
+            names = lmap(compat.text_type, self.columns)
 
-        dtype = np.dtype([(x, v.dtype) for x, v in zip(names, arrays)])
-        return np.rec.fromarrays(arrays, dtype=dtype, names=names)
+        formats = [v.dtype for v in arrays]
+        return np.rec.fromarrays(
+            arrays,
+            dtype={'names': names, 'formats': formats}
+        )
 
     @classmethod
     def from_items(cls, items, columns=None, orient='columns'):
@@ -1274,7 +1296,7 @@ class DataFrame(NDFrame):
 
         # minor axis must be sorted
         if self.index.lexsort_depth < 2:
-            selfsorted = self.sortlevel(0)
+            selfsorted = self.sort_index(level=0)
         else:
             selfsorted = self
 
@@ -1390,7 +1412,8 @@ class DataFrame(NDFrame):
     def to_excel(self, excel_writer, sheet_name='Sheet1', na_rep='',
                  float_format=None, columns=None, header=True, index=True,
                  index_label=None, startrow=0, startcol=0, engine=None,
-                 merge_cells=True, encoding=None, inf_rep='inf', verbose=True):
+                 merge_cells=True, encoding=None, inf_rep='inf', verbose=True,
+                 freeze_panes=None):
         from pandas.io.excel import ExcelWriter
         need_save = False
         if encoding is None:
@@ -1406,11 +1429,25 @@ class DataFrame(NDFrame):
                                        index_label=index_label,
                                        merge_cells=merge_cells,
                                        inf_rep=inf_rep)
+
         formatted_cells = formatter.get_formatted_cells()
+        freeze_panes = self._validate_freeze_panes(freeze_panes)
         excel_writer.write_cells(formatted_cells, sheet_name,
-                                 startrow=startrow, startcol=startcol)
+                                 startrow=startrow, startcol=startcol,
+                                 freeze_panes=freeze_panes)
         if need_save:
             excel_writer.save()
+
+    def _validate_freeze_panes(self, freeze_panes):
+        if freeze_panes is not None:
+            if (
+                len(freeze_panes) == 2 and
+                all(isinstance(item, int) for item in freeze_panes)
+            ):
+                return freeze_panes
+
+                raise ValueError("freeze_panes must be of form (row, column)"
+                                 " where row and column are integers")
 
     def to_stata(self, fname, convert_dates=None, write_index=True,
                  encoding="latin-1", byteorder=None, time_stamp=None,
@@ -1577,10 +1614,11 @@ class DataFrame(NDFrame):
                  index=True, na_rep='NaN', formatters=None, float_format=None,
                  sparsify=None, index_names=True, bold_rows=True,
                  column_format=None, longtable=None, escape=None,
-                 encoding=None, decimal='.'):
-        """
+                 encoding=None, decimal='.', multicolumn=None,
+                 multicolumn_format=None, multirow=None):
+        r"""
         Render a DataFrame to a tabular environment table. You can splice
-        this into a LaTeX document. Requires \\usepackage{booktabs}.
+        this into a LaTeX document. Requires \usepackage{booktabs}.
 
         `to_latex`-specific options:
 
@@ -1591,20 +1629,41 @@ class DataFrame(NDFrame):
             <https://en.wikibooks.org/wiki/LaTeX/Tables>`__ e.g 'rcl' for 3
             columns
         longtable : boolean, default will be read from the pandas config module
-            default: False
+            Default: False.
             Use a longtable environment instead of tabular. Requires adding
-            a \\usepackage{longtable} to your LaTeX preamble.
+            a \usepackage{longtable} to your LaTeX preamble.
         escape : boolean, default will be read from the pandas config module
-            default: True
+            Default: True.
             When set to False prevents from escaping latex special
             characters in column names.
         encoding : str, default None
             A string representing the encoding to use in the output file,
             defaults to 'ascii' on Python 2 and 'utf-8' on Python 3.
         decimal : string, default '.'
-            Character recognized as decimal separator, e.g. ',' in Europe
+            Character recognized as decimal separator, e.g. ',' in Europe.
 
             .. versionadded:: 0.18.0
+
+        multicolumn : boolean, default True
+            Use \multicolumn to enhance MultiIndex columns.
+            The default will be read from the config module.
+
+            .. versionadded:: 0.20.0
+
+        multicolumn_format : str, default 'l'
+            The alignment for multicolumns, similar to `column_format`
+            The default will be read from the config module.
+
+            .. versionadded:: 0.20.0
+
+        multirow : boolean, default False
+            Use \multirow to enhance MultiIndex rows.
+            Requires adding a \usepackage{multirow} to your LaTeX preamble.
+            Will print centered labels (instead of top-aligned)
+            across the contained rows, separating groups via clines.
+            The default will be read from the pandas config module.
+
+            .. versionadded:: 0.20.0
 
         """
         # Get defaults from the pandas config
@@ -1612,6 +1671,12 @@ class DataFrame(NDFrame):
             longtable = get_option("display.latex.longtable")
         if escape is None:
             escape = get_option("display.latex.escape")
+        if multicolumn is None:
+            multicolumn = get_option("display.latex.multicolumn")
+        if multicolumn_format is None:
+            multicolumn_format = get_option("display.latex.multicolumn_format")
+        if multirow is None:
+            multirow = get_option("display.latex.multirow")
 
         formatter = fmt.DataFrameFormatter(self, buf=buf, columns=columns,
                                            col_space=col_space, na_rep=na_rep,
@@ -1623,7 +1688,9 @@ class DataFrame(NDFrame):
                                            index_names=index_names,
                                            escape=escape, decimal=decimal)
         formatter.to_latex(column_format=column_format, longtable=longtable,
-                           encoding=encoding)
+                           encoding=encoding, multicolumn=multicolumn,
+                           multicolumn_format=multicolumn_format,
+                           multirow=multirow)
 
         if buf is None:
             return formatter.buf.getvalue()
@@ -1752,7 +1819,8 @@ class DataFrame(NDFrame):
                 # all cases (e.g., it misses categorical data even with object
                 # categories)
                 deep = False
-                if 'object' in counts or is_object_dtype(self.index):
+                if ('object' in counts or
+                        self.index._is_memory_usage_qualified()):
                     size_qualifier = '+'
             mem_usage = self.memory_usage(index=True, deep=deep).sum()
             lines.append("memory usage: %s\n" %
@@ -1895,23 +1963,6 @@ class DataFrame(NDFrame):
 
             return self
 
-    def irow(self, i, copy=False):
-        """
-        DEPRECATED. Use ``.iloc[i]`` instead
-        """
-
-        warnings.warn("irow(i) is deprecated. Please use .iloc[i]",
-                      FutureWarning, stacklevel=2)
-        return self._ixs(i, axis=0)
-
-    def icol(self, i):
-        """
-        DEPRECATED. Use ``.iloc[:, i]`` instead
-        """
-        warnings.warn("icol(i) is deprecated. Please use .iloc[:,i]",
-                      FutureWarning, stacklevel=2)
-        return self._ixs(i, axis=1)
-
     def _ixs(self, i, axis=0):
         """
         i : int, slice, or sequence of integers
@@ -1961,7 +2012,7 @@ class DataFrame(NDFrame):
             if isinstance(i, slice):
                 # need to return view
                 lab_slice = slice(label[0], label[-1])
-                return self.ix[:, lab_slice]
+                return self.loc[:, lab_slice]
             else:
                 if isinstance(label, Index):
                     return self.take(i, axis=1, convert=True)
@@ -1985,14 +2036,6 @@ class DataFrame(NDFrame):
                 result._set_as_cached(label, self)
 
                 return result
-
-    def iget_value(self, i, j):
-        """
-        DEPRECATED. Use ``.iat[i, j]`` instead
-        """
-        warnings.warn("iget_value(i, j) is deprecated. Please use .iat[i, j]",
-                      FutureWarning, stacklevel=2)
-        return self.iat[i, j]
 
     def __getitem__(self, key):
         key = com._apply_if_callable(key, self)
@@ -2056,7 +2099,7 @@ class DataFrame(NDFrame):
             indexer = key.nonzero()[0]
             return self.take(indexer, axis=0, convert=False)
         else:
-            indexer = self.ix._convert_to_indexer(key, axis=1)
+            indexer = self.loc._convert_to_indexer(key, axis=1)
             return self.take(indexer, axis=1, convert=True)
 
     def _getitem_multilevel(self, key):
@@ -2164,6 +2207,7 @@ class DataFrame(NDFrame):
         >>> df.query('a > b')
         >>> df[df.a > df.b]  # same result as the previous expression
         """
+        inplace = validate_bool_kwarg(inplace, 'inplace')
         if not isinstance(expr, compat.string_types):
             msg = "expr must be a string to be evaluated, {0} given"
             raise ValueError(msg.format(type(expr)))
@@ -2230,6 +2274,7 @@ class DataFrame(NDFrame):
         >>> df.eval('a + b')
         >>> df.eval('c = a + b')
         """
+        inplace = validate_bool_kwarg(inplace, 'inplace')
         resolvers = kwargs.pop('resolvers', None)
         kwargs['level'] = kwargs.pop('level', 0) + 1
         if resolvers is None:
@@ -2387,7 +2432,7 @@ class DataFrame(NDFrame):
 
     def _setitem_slice(self, key, value):
         self._check_setitem_copy()
-        self.ix._setitem_with_indexer(key, value)
+        self.loc._setitem_with_indexer(key, value)
 
     def _setitem_array(self, key, value):
         # also raises Exception if object array with NA values
@@ -2398,7 +2443,7 @@ class DataFrame(NDFrame):
             key = check_bool_indexer(self.index, key)
             indexer = key.nonzero()[0]
             self._check_setitem_copy()
-            self.ix._setitem_with_indexer(indexer, value)
+            self.loc._setitem_with_indexer(indexer, value)
         else:
             if isinstance(value, DataFrame):
                 if len(value.columns) != len(key):
@@ -2406,9 +2451,9 @@ class DataFrame(NDFrame):
                 for k1, k2 in zip(key, value.columns):
                     self[k1] = value[k2]
             else:
-                indexer = self.ix._convert_to_indexer(key, axis=1)
+                indexer = self.loc._convert_to_indexer(key, axis=1)
                 self._check_setitem_copy()
-                self.ix._setitem_with_indexer((slice(None), indexer), value)
+                self.loc._setitem_with_indexer((slice(None), indexer), value)
 
     def _setitem_frame(self, key, value):
         # support boolean setting with DataFrame input, e.g.
@@ -2843,6 +2888,7 @@ class DataFrame(NDFrame):
         -------
         dataframe : DataFrame
         """
+        inplace = validate_bool_kwarg(inplace, 'inplace')
         if not isinstance(keys, list):
             keys = [keys]
 
@@ -2857,7 +2903,7 @@ class DataFrame(NDFrame):
             names = [x for x in self.index.names]
             if isinstance(self.index, MultiIndex):
                 for i in range(self.index.nlevels):
-                    arrays.append(self.index.get_level_values(i))
+                    arrays.append(self.index._get_level_values(i))
             else:
                 arrays.append(self.index)
 
@@ -2867,9 +2913,9 @@ class DataFrame(NDFrame):
                 # append all but the last column so we don't have to modify
                 # the end of this loop
                 for n in range(col.nlevels - 1):
-                    arrays.append(col.get_level_values(n))
+                    arrays.append(col._get_level_values(n))
 
-                level = col.get_level_values(col.nlevels - 1)
+                level = col._get_level_values(col.nlevels - 1)
                 names.extend(col.names)
             elif isinstance(col, Series):
                 level = col._values
@@ -2935,6 +2981,7 @@ class DataFrame(NDFrame):
         -------
         resetted : DataFrame
         """
+        inplace = validate_bool_kwarg(inplace, 'inplace')
         if inplace:
             new_obj = self
         else:
@@ -2953,10 +3000,17 @@ class DataFrame(NDFrame):
             # if we have the labels, extract the values with a mask
             if labels is not None:
                 mask = labels == -1
-                values = values.take(labels)
-                if mask.any():
-                    values, changed = _maybe_upcast_putmask(values, mask,
-                                                            np.nan)
+
+                # we can have situations where the whole mask is -1,
+                # meaning there is nothing found in labels, so make all nan's
+                if mask.all():
+                    values = np.empty(len(mask))
+                    values.fill(np.nan)
+                else:
+                    values = values.take(labels)
+                    if mask.any():
+                        values, changed = _maybe_upcast_putmask(values, mask,
+                                                                np.nan)
             return values
 
         new_index = _default_index(len(new_obj))
@@ -3039,6 +3093,7 @@ class DataFrame(NDFrame):
         -------
         dropped : DataFrame
         """
+        inplace = validate_bool_kwarg(inplace, 'inplace')
         if isinstance(axis, (tuple, list)):
             result = self
             for ax in axis:
@@ -3102,6 +3157,7 @@ class DataFrame(NDFrame):
         -------
         deduplicated : DataFrame
         """
+        inplace = validate_bool_kwarg(inplace, 'inplace')
         duplicated = self.duplicated(subset, keep=keep)
 
         if inplace:
@@ -3135,7 +3191,7 @@ class DataFrame(NDFrame):
         -------
         duplicated : Series
         """
-        from pandas.core.groupby import get_group_index
+        from pandas.core.sorting import get_group_index
         from pandas.hashtable import duplicated_int64, _SIZE_HINT_LIMIT
 
         def f(vals):
@@ -3163,7 +3219,7 @@ class DataFrame(NDFrame):
     @Appender(_shared_docs['sort_values'] % _shared_doc_kwargs)
     def sort_values(self, by, axis=0, ascending=True, inplace=False,
                     kind='quicksort', na_position='last'):
-
+        inplace = validate_bool_kwarg(inplace, 'inplace')
         axis = self._get_axis_number(axis)
         other_axis = 0 if axis == 1 else 1
 
@@ -3173,7 +3229,7 @@ class DataFrame(NDFrame):
             raise ValueError('Length of ascending (%d) != length of by (%d)' %
                              (len(ascending), len(by)))
         if len(by) > 1:
-            from pandas.core.groupby import _lexsort_indexer
+            from pandas.core.sorting import lexsort_indexer
 
             def trans(v):
                 if needs_i8_conversion(v):
@@ -3187,11 +3243,11 @@ class DataFrame(NDFrame):
                     raise ValueError('Cannot sort by duplicate column %s' %
                                      str(x))
                 keys.append(trans(k))
-            indexer = _lexsort_indexer(keys, orders=ascending,
-                                       na_position=na_position)
+            indexer = lexsort_indexer(keys, orders=ascending,
+                                      na_position=na_position)
             indexer = _ensure_platform_int(indexer)
         else:
-            from pandas.core.groupby import _nargsort
+            from pandas.core.sorting import nargsort
 
             by = by[0]
             k = self.xs(by, axis=other_axis).values
@@ -3208,8 +3264,8 @@ class DataFrame(NDFrame):
             if isinstance(ascending, (tuple, list)):
                 ascending = ascending[0]
 
-            indexer = _nargsort(k, kind=kind, ascending=ascending,
-                                na_position=na_position)
+            indexer = nargsort(k, kind=kind, ascending=ascending,
+                               na_position=na_position)
 
         new_data = self._data.take(indexer,
                                    axis=self._get_block_manager_axis(axis),
@@ -3274,7 +3330,7 @@ class DataFrame(NDFrame):
     def sort_index(self, axis=0, level=None, ascending=True, inplace=False,
                    kind='quicksort', na_position='last', sort_remaining=True,
                    by=None):
-
+        inplace = validate_bool_kwarg(inplace, 'inplace')
         # 10726
         if by is not None:
             warnings.warn("by argument to sort_index is deprecated, pls use "
@@ -3294,17 +3350,17 @@ class DataFrame(NDFrame):
                                                  sort_remaining=sort_remaining)
 
         elif isinstance(labels, MultiIndex):
-            from pandas.core.groupby import _lexsort_indexer
+            from pandas.core.sorting import lexsort_indexer
 
             # make sure that the axis is lexsorted to start
             # if not we need to reconstruct to get the correct indexer
             if not labels.is_lexsorted():
                 labels = MultiIndex.from_tuples(labels.values)
 
-            indexer = _lexsort_indexer(labels.labels, orders=ascending,
-                                       na_position=na_position)
+            indexer = lexsort_indexer(labels.labels, orders=ascending,
+                                      na_position=na_position)
         else:
-            from pandas.core.groupby import _nargsort
+            from pandas.core.sorting import nargsort
 
             # GH11080 - Check monotonic-ness before sort an index
             # if monotonic (already sorted), return None or copy() according
@@ -3316,8 +3372,8 @@ class DataFrame(NDFrame):
                 else:
                     return self.copy()
 
-            indexer = _nargsort(labels, kind=kind, ascending=ascending,
-                                na_position=na_position)
+            indexer = nargsort(labels, kind=kind, ascending=ascending,
+                               na_position=na_position)
 
         new_data = self._data.take(indexer,
                                    axis=self._get_block_manager_axis(axis),
@@ -3331,6 +3387,8 @@ class DataFrame(NDFrame):
     def sortlevel(self, level=0, axis=0, ascending=True, inplace=False,
                   sort_remaining=True):
         """
+        DEPRECATED: use :meth:`DataFrame.sort_index`
+
         Sort multilevel index by chosen axis and primary level. Data will be
         lexicographically sorted by the chosen level followed by the other
         levels (in order)
@@ -3354,6 +3412,8 @@ class DataFrame(NDFrame):
         DataFrame.sort_index(level=...)
 
         """
+        warnings.warn("sortlevel is deprecated, use sort_index(level= ...)",
+                      FutureWarning, stacklevel=2)
         return self.sort_index(level=level, axis=axis, ascending=ascending,
                                inplace=inplace, sort_remaining=sort_remaining)
 
@@ -3585,9 +3645,6 @@ class DataFrame(NDFrame):
         return self._constructor(new_data)
 
     def _combine_const(self, other, func, raise_on_error=True):
-        if self.empty:
-            return self
-
         new_data = self._data.eval(func=func, other=other,
                                    raise_on_error=raise_on_error)
         return self._constructor(new_data)
@@ -4393,9 +4450,9 @@ class DataFrame(NDFrame):
         elif isinstance(other, list) and not isinstance(other[0], DataFrame):
             other = DataFrame(other)
             if (self.columns.get_indexer(other.columns) >= 0).all():
-                other = other.ix[:, self.columns]
+                other = other.loc[:, self.columns]
 
-        from pandas.tools.merge import concat
+        from pandas.tools.concat import concat
         if isinstance(other, (list, tuple)):
             to_concat = [self] + other
         else:
@@ -4525,7 +4582,8 @@ class DataFrame(NDFrame):
 
     def _join_compat(self, other, on=None, how='left', lsuffix='', rsuffix='',
                      sort=False):
-        from pandas.tools.merge import merge, concat
+        from pandas.tools.merge import merge
+        from pandas.tools.concat import concat
 
         if isinstance(other, Series):
             if other.name is None:
@@ -4629,7 +4687,7 @@ class DataFrame(NDFrame):
         Series.round
 
         """
-        from pandas.tools.merge import concat
+        from pandas.tools.concat import concat
 
         def _dict_round(df, decimals):
             for col, vals in df.iteritems():
@@ -4689,6 +4747,7 @@ class DataFrame(NDFrame):
         """
         numeric_df = self._get_numeric_data()
         cols = numeric_df.columns
+        idx = cols.copy()
         mat = numeric_df.values
 
         if method == 'pearson':
@@ -4721,7 +4780,7 @@ class DataFrame(NDFrame):
                     correl[i, j] = c
                     correl[j, i] = c
 
-        return self._constructor(correl, index=cols, columns=cols)
+        return self._constructor(correl, index=idx, columns=cols)
 
     def cov(self, min_periods=None):
         """
@@ -4744,6 +4803,7 @@ class DataFrame(NDFrame):
         """
         numeric_df = self._get_numeric_data()
         cols = numeric_df.columns
+        idx = cols.copy()
         mat = numeric_df.values
 
         if notnull(mat).all():
@@ -4757,7 +4817,7 @@ class DataFrame(NDFrame):
             baseCov = _algos.nancorr(_ensure_float64(mat), cov=True,
                                      minp=min_periods)
 
-        return self._constructor(baseCov, index=cols, columns=cols)
+        return self._constructor(baseCov, index=idx, columns=cols)
 
     def corrwith(self, other, axis=0, drop=False):
         """
@@ -4968,6 +5028,37 @@ class DataFrame(NDFrame):
                     result = _coerce_to_dtypes(result, self.dtypes)
 
         return Series(result, index=labels)
+
+    def nunique(self, axis=0, dropna=True):
+        """
+        Return Series with number of distinct observations over requested
+        axis.
+
+        .. versionadded:: 0.20.0
+
+        Parameters
+        ----------
+        axis : {0 or 'index', 1 or 'columns'}, default 0
+        dropna : boolean, default True
+            Don't include NaN in the counts.
+
+        Returns
+        -------
+        nunique : Series
+
+        Examples
+        --------
+        >>> df = pd.DataFrame({'A': [1, 2, 3], 'B': [1, 1, 1]})
+        >>> df.nunique()
+        A    3
+        B    1
+
+        >>> df.nunique(axis=1)
+        0    1
+        1    2
+        2    2
+        """
+        return self.apply(Series.nunique, axis=axis, dropna=dropna)
 
     def idxmin(self, axis=0, skipna=True):
         """
@@ -5268,7 +5359,7 @@ class DataFrame(NDFrame):
         """
         if isinstance(values, dict):
             from collections import defaultdict
-            from pandas.tools.merge import concat
+            from pandas.tools.concat import concat
             values = defaultdict(list, values)
             return concat((self.iloc[:, [i]].isin(values[col])
                            for i, col in enumerate(self.columns)), axis=1)
@@ -5288,9 +5379,10 @@ class DataFrame(NDFrame):
                                 "allowed to be passed to DataFrame.isin(), "
                                 "you passed a "
                                 "{0!r}".format(type(values).__name__))
-            return DataFrame(lib.ismember(self.values.ravel(),
+            return DataFrame(
+                lib.ismember(self.values.ravel(),
                              set(values)).reshape(self.shape), self.index,
-                             self.columns)
+                self.columns)
 
     # ----------------------------------------------------------------------
     # Deprecated stuff
@@ -5700,9 +5792,9 @@ def _from_nested_dict(data):
 def _put_str(s, space):
     return ('%s' % s)[:space].ljust(space)
 
+
 # ----------------------------------------------------------------------
 # Add plotting methods to DataFrame
-
 DataFrame.plot = base.AccessorProperty(gfx.FramePlotMethods,
                                        gfx.FramePlotMethods)
 DataFrame.hist = gfx.hist_frame
@@ -5724,8 +5816,3 @@ DataFrame.boxplot = boxplot
 
 ops.add_flex_arithmetic_methods(DataFrame, **ops.frame_flex_funcs)
 ops.add_special_arithmetic_methods(DataFrame, **ops.frame_special_funcs)
-
-if __name__ == '__main__':
-    import nose
-    nose.runmodule(argv=[__file__, '-vvs', '-x', '--pdb', '--pdb-failure'],
-                   exit=False)

@@ -444,13 +444,15 @@ class _TimeOp(_Op):
         supplied_dtype = None
         if not is_list_like(values):
             values = np.array([values])
+
         # if this is a Series that contains relevant dtype info, then use this
         # instead of the inferred type; this avoids coercing Series([NaT],
         # dtype='datetime64[ns]') to Series([NaT], dtype='timedelta64[ns]')
         elif (isinstance(values, pd.Series) and
               (is_timedelta64_dtype(values) or is_datetime64_dtype(values))):
             supplied_dtype = values.dtype
-        inferred_type = supplied_dtype or lib.infer_dtype(values)
+
+        inferred_type = lib.infer_dtype(values)
         if (inferred_type in ('datetime64', 'datetime', 'date', 'time') or
                 is_datetimetz(inferred_type)):
             # if we have a other of timedelta, but use pd.NaT here we
@@ -1247,7 +1249,7 @@ def _flex_comp_method_FRAME(op, name, str_rep=None, default_axis='columns',
             result = op(x, y)
         except TypeError:
             xrav = x.ravel()
-            result = np.empty(x.size, dtype=x.dtype)
+            result = np.empty(x.size, dtype=bool)
             if isinstance(y, (np.ndarray, ABCSeries)):
                 yrav = y.ravel()
                 mask = notnull(xrav) & notnull(yrav)

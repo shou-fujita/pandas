@@ -25,8 +25,6 @@ from pandas.tests.frame.common import TestData
 
 class TestDataFrameReshape(tm.TestCase, TestData):
 
-    _multiprocess_can_split_ = True
-
     def test_pivot(self):
         data = {
             'index': ['A', 'B', 'C', 'C', 'B', 'A'],
@@ -123,19 +121,22 @@ class TestDataFrameReshape(tm.TestCase, TestData):
         assert_frame_equal(result, expected)
 
     def test_stack_unstack(self):
-        stacked = self.frame.stack()
+        f = self.frame.copy()
+        f[:] = np.arange(np.prod(f.shape)).reshape(f.shape)
+
+        stacked = f.stack()
         stacked_df = DataFrame({'foo': stacked, 'bar': stacked})
 
         unstacked = stacked.unstack()
         unstacked_df = stacked_df.unstack()
 
-        assert_frame_equal(unstacked, self.frame)
-        assert_frame_equal(unstacked_df['bar'], self.frame)
+        assert_frame_equal(unstacked, f)
+        assert_frame_equal(unstacked_df['bar'], f)
 
         unstacked_cols = stacked.unstack(0)
         unstacked_cols_df = stacked_df.unstack(0)
-        assert_frame_equal(unstacked_cols.T, self.frame)
-        assert_frame_equal(unstacked_cols_df['bar'].T, self.frame)
+        assert_frame_equal(unstacked_cols.T, f)
+        assert_frame_equal(unstacked_cols_df['bar'].T, f)
 
     def test_unstack_fill(self):
 
@@ -659,7 +660,7 @@ class TestDataFrameReshape(tm.TestCase, TestData):
         right = DataFrame(vals, columns=cols, index=idx)
         assert_frame_equal(left, right)
 
-        left = df.ix[17264:].copy().set_index(['s_id', 'dosage', 'agent'])
+        left = df.loc[17264:].copy().set_index(['s_id', 'dosage', 'agent'])
         assert_frame_equal(left.unstack(), right)
 
         # GH9497 - multiple unstack with nulls

@@ -66,6 +66,7 @@ import pandas.core.common as com
 import pandas.core.nanops as nanops
 import pandas.formats.format as fmt
 from pandas.util.decorators import Appender, deprecate_kwarg, Substitution
+from pandas.util.validators import validate_bool_kwarg
 
 import pandas.lib as lib
 import pandas.tslib as tslib
@@ -236,7 +237,8 @@ class Series(base.IndexOpsMixin, strings.StringAccessorMixin,
             # create/copy the manager
             if isinstance(data, SingleBlockManager):
                 if dtype is not None:
-                    data = data.astype(dtype=dtype, raise_on_error=False)
+                    data = data.astype(dtype=dtype, raise_on_error=False,
+                                       copy=copy)
                 elif copy:
                     data = data.copy()
             else:
@@ -274,13 +276,6 @@ class Series(base.IndexOpsMixin, strings.StringAccessorMixin,
     @property
     def _can_hold_na(self):
         return self._data._can_hold_na
-
-    @property
-    def is_time_series(self):
-        warnings.warn("is_time_series is deprecated. Please use "
-                      "Series.index.is_all_dates", FutureWarning, stacklevel=2)
-        # return self._subtyp in ['time_series', 'sparse_time_series']
-        return self.index.is_all_dates
 
     _index = None
 
@@ -683,7 +678,7 @@ class Series(base.IndexOpsMixin, strings.StringAccessorMixin,
                 try:
                     # handle the dup indexing case (GH 4246)
                     if isinstance(key, (list, tuple)):
-                        return self.ix[key]
+                        return self.loc[key]
 
                     return self.reindex(key)
                 except Exception:
@@ -880,31 +875,6 @@ class Series(base.IndexOpsMixin, strings.StringAccessorMixin,
 
         return self._values.reshape(shape, **kwargs)
 
-    def iget_value(self, i, axis=0):
-        """
-        DEPRECATED. Use ``.iloc[i]`` or ``.iat[i]`` instead
-        """
-        warnings.warn("iget_value(i) is deprecated. Please use .iloc[i] or "
-                      ".iat[i]", FutureWarning, stacklevel=2)
-        return self._ixs(i)
-
-    def iget(self, i, axis=0):
-        """
-        DEPRECATED. Use ``.iloc[i]`` or ``.iat[i]`` instead
-        """
-
-        warnings.warn("iget(i) is deprecated. Please use .iloc[i] or .iat[i]",
-                      FutureWarning, stacklevel=2)
-        return self._ixs(i)
-
-    def irow(self, i, axis=0):
-        """
-        DEPRECATED. Use ``.iloc[i]`` or ``.iat[i]`` instead
-        """
-        warnings.warn("irow(i) is deprecated. Please use .iloc[i] or .iat[i]",
-                      FutureWarning, stacklevel=2)
-        return self._ixs(i)
-
     def get_value(self, label, takeable=False):
         """
         Quickly retrieve single value at passed index label
@@ -975,6 +945,7 @@ class Series(base.IndexOpsMixin, strings.StringAccessorMixin,
         ----------
         resetted : DataFrame, or Series if drop == True
         """
+        inplace = validate_bool_kwarg(inplace, 'inplace')
         if drop:
             new_index = _default_index(len(self))
             if level is not None and isinstance(self.index, MultiIndex):
@@ -1175,6 +1146,7 @@ class Series(base.IndexOpsMixin, strings.StringAccessorMixin,
         inplace : bool
             whether to modify `self` directly or return a copy
         """
+        inplace = validate_bool_kwarg(inplace, 'inplace')
         ser = self if inplace else self.copy()
         ser.name = name
         return ser
@@ -1584,7 +1556,7 @@ class Series(base.IndexOpsMixin, strings.StringAccessorMixin,
 
 
         """
-        from pandas.tools.merge import concat
+        from pandas.tools.concat import concat
 
         if isinstance(to_append, (list, tuple)):
             to_concat = [self] + to_append
@@ -1722,6 +1694,7 @@ class Series(base.IndexOpsMixin, strings.StringAccessorMixin,
     def sort_values(self, axis=0, ascending=True, inplace=False,
                     kind='quicksort', na_position='last'):
 
+        inplace = validate_bool_kwarg(inplace, 'inplace')
         axis = self._get_axis_number(axis)
 
         # GH 5856/5853
@@ -1774,18 +1747,19 @@ class Series(base.IndexOpsMixin, strings.StringAccessorMixin,
     def sort_index(self, axis=0, level=None, ascending=True, inplace=False,
                    kind='quicksort', na_position='last', sort_remaining=True):
 
+        inplace = validate_bool_kwarg(inplace, 'inplace')
         axis = self._get_axis_number(axis)
         index = self.index
         if level is not None:
             new_index, indexer = index.sortlevel(level, ascending=ascending,
                                                  sort_remaining=sort_remaining)
         elif isinstance(index, MultiIndex):
-            from pandas.core.groupby import _lexsort_indexer
-            indexer = _lexsort_indexer(index.labels, orders=ascending)
+            from pandas.core.sorting import lexsort_indexer
+            indexer = lexsort_indexer(index.labels, orders=ascending)
         else:
-            from pandas.core.groupby import _nargsort
-            indexer = _nargsort(index, kind=kind, ascending=ascending,
-                                na_position=na_position)
+            from pandas.core.sorting import nargsort
+            indexer = nargsort(index, kind=kind, ascending=ascending,
+                               na_position=na_position)
 
         indexer = _ensure_platform_int(indexer)
         new_index = index.take(indexer)
@@ -1983,6 +1957,8 @@ class Series(base.IndexOpsMixin, strings.StringAccessorMixin,
 
     def sortlevel(self, level=0, ascending=True, sort_remaining=True):
         """
+        DEPRECATED: use :meth:`Series.sort_index`
+
         Sort Series with MultiIndex by chosen level. Data will be
         lexicographically sorted by the chosen level followed by the other
         levels (in order)
@@ -2001,6 +1977,8 @@ class Series(base.IndexOpsMixin, strings.StringAccessorMixin,
         Series.sort_index(level=...)
 
         """
+        warnings.warn("sortlevel is deprecated, use sort_index(level=...)",
+                      FutureWarning, stacklevel=2)
         return self.sort_index(level=level, ascending=ascending,
                                sort_remaining=sort_remaining)
 
@@ -2111,13 +2089,15 @@ class Series(base.IndexOpsMixin, strings.StringAccessorMixin,
         Examples
         --------
 
-        Map inputs to outputs
+        Map inputs to outputs (both of type `Series`)
 
+        >>> x = pd.Series([1,2,3], index=['one', 'two', 'three'])
         >>> x
         one   1
         two   2
         three 3
 
+        >>> y = pd.Series(['foo', 'bar', 'baz'], index=[1,2,3])
         >>> y
         1  foo
         2  bar
@@ -2127,6 +2107,16 @@ class Series(base.IndexOpsMixin, strings.StringAccessorMixin,
         one   foo
         two   bar
         three baz
+
+        Mapping a dictionary keys on the index labels works similar as
+        with a `Series`:
+
+        >>> z = {1: 'A', 2: 'B', 3: 'C'}
+
+        >>> x.map(z)
+        one   A
+        two   B
+        three C
 
         Use na_action to control whether NA values are affected by the mapping
         function.
@@ -2149,6 +2139,11 @@ class Series(base.IndexOpsMixin, strings.StringAccessorMixin,
         3                     NaN
         dtype: object
 
+        See Also
+        --------
+        Series.apply: For applying more complex functions on a Series
+        DataFrame.apply: Apply a function row-/column-wise
+        DataFrame.applymap: Apply a function elementwise on a whole DataFrame
         """
 
         if is_extension_type(self.dtype):
@@ -2350,6 +2345,9 @@ class Series(base.IndexOpsMixin, strings.StringAccessorMixin,
 
     @Appender(generic._shared_docs['rename'] % _shared_doc_kwargs)
     def rename(self, index=None, **kwargs):
+        kwargs['inplace'] = validate_bool_kwarg(kwargs.get('inplace', False),
+                                                'inplace')
+
         non_mapping = is_scalar(index) or (is_list_like(index) and
                                            not is_dict_like(index))
         if non_mapping:
@@ -2646,6 +2644,7 @@ class Series(base.IndexOpsMixin, strings.StringAccessorMixin,
         inplace : boolean, default False
             Do operation in place.
         """
+        inplace = validate_bool_kwarg(inplace, 'inplace')
         kwargs.pop('how', None)
         if kwargs:
             raise TypeError('dropna() got an unexpected keyword '
@@ -2970,15 +2969,6 @@ def _sanitize_array(data, index, dtype=None, copy=False,
 
     return subarr
 
-
-# backwards compatiblity
-class TimeSeries(Series):
-    def __init__(self, *args, **kwargs):
-        # deprecation TimeSeries, #10890
-        warnings.warn("TimeSeries is deprecated. Please use Series",
-                      FutureWarning, stacklevel=2)
-
-        super(TimeSeries, self).__init__(*args, **kwargs)
 
 # ----------------------------------------------------------------------
 # Add plotting methods to Series
